@@ -2,7 +2,7 @@
   "name": "スマート点呼",
   "short_name": "スマート点呼",
   "description": "ドライバー向け点呼管理アプリ",
-  "start_url": "/tenko-app/",
+  "start_url": "/smart-tenko/",
   "display": "standalone",
   "background_color": "#0b1220",
   "theme_color": "#3b82f6",

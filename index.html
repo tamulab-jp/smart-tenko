@@ -72,6 +72,7 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--text
 .opt{font-size:10px;color:var(--text3);font-weight:400;margin-left:6px;}
 .field input,.field select,.field textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;color:var(--text);font-size:16px;font-family:'Noto Sans JP',sans-serif;outline:none;transition:border-color .2s;appearance:none;-webkit-appearance:none;}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--accent);}
+.field input[type=date]{color-scheme:dark;}
 .field textarea{resize:vertical;min-height:72px;}
 .field select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238b949e' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:36px;}
 .field input.large{font-size:22px;font-family:'Share Tech Mono',monospace;text-align:center;letter-spacing:.05em;}
@@ -292,6 +293,9 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--text
   </div>
   <button class="btn-primary" id="submitBtn" onclick="submit()" style="margin-bottom:6px;">✅ 乗務前点呼を記録する</button>
   <div style="font-size:11px;color:var(--text3);text-align:center;margin-bottom:8px;">▼ 修正が必要な場合は履歴タブから削除して登録しなおしてください</div>
+  <div id="backdateCancelBar" style="display:none;text-align:center;margin:-2px 0 12px;">
+    <span style="font-size:12px;color:var(--accent);font-weight:700;cursor:pointer;" onclick="cancelBackdate()">✕ 事後登録をキャンセルして通常入力に戻る</span>
+  </div>
 
   <!-- 設定サマリー（設定タブへのリンク） -->
   <!-- 未設定警告（記録ボタン押下時のみ表示） -->
@@ -404,6 +408,7 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--text
     <div class="chip" onclick="filterRec('after',this)">乗務後</div>
     <div class="chip" onclick="filterRec('ng',this)">⚠️ 要確認</div>
   </div>
+  <button class="btn-sub" onclick="openBackdateModal()" style="margin-bottom:14px;">⏱ 事後登録（過去の点呼を追加）</button>
   <div id="histList"></div>
 </div>
 
@@ -724,6 +729,29 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--text
   </div>
 </div>
 
+<!-- 事後登録モーダル -->
+<div id="backdateModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;align-items:flex-end;justify-content:center;">
+  <div style="background:var(--surface);border-radius:16px 16px 0 0;padding:20px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-size:16px;font-weight:900;">⏱ 事後登録</div>
+      <button onclick="closeBackdateModal()" style="background:none;border:none;color:var(--text2);font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:16px;line-height:1.6;">入力を忘れた過去の点呼を、あとから登録できます。正確な時刻は記録されず、履歴上に「事後登録」として通常の記録と区別して表示されます。</div>
+    <div class="field">
+      <label>📅 対象日</label>
+      <input type="date" id="backdateDate">
+    </div>
+    <div class="field" style="margin-bottom:20px;">
+      <label>区分</label>
+      <div class="chips" style="margin-bottom:0;">
+        <div class="chip active" id="backdateTypeBefore" onclick="selectBackdateType('before')">🌅 乗務前点呼</div>
+        <div class="chip" id="backdateTypeAfter" onclick="selectBackdateType('after')">🌙 乗務後点呼</div>
+      </div>
+    </div>
+    <button class="btn-primary" style="margin-top:0;" onclick="confirmBackdate()">次へ（点呼を入力する）</button>
+  </div>
+</div>
+
 </div><!-- /main -->
 <div class="toast" id="toast"></div>
 
@@ -736,6 +764,7 @@ let foldOpen = true;
 let meterB64 = null;
 let currentMode = 'manual'; // ocr / manual
 let statsMonth = new Date();
+let backdateInfo = null; // {dateStr, type} 事後登録中はセット
 
 // ════════════ 初期化 ════════════
 window.addEventListener('DOMContentLoaded', () => {
@@ -800,10 +829,14 @@ function currentType() {
   if (!after)  return 'after';
   return 'done';
 }
+// 事後登録中はbackdateInfoの区分を優先する
+function activeType() {
+  return backdateInfo ? backdateInfo.type : currentType();
+}
 
 // ════════════ ステータスバナー ════════════
 function updateStatusBanner() {
-  const type = currentType();
+  const type = activeType();
   const banner = document.getElementById('statusBanner');
   banner.className = 'status-banner ' + (type==='done'?'done':type);
   const isManual = currentMode === 'manual';
@@ -813,27 +846,32 @@ function updateStatusBanner() {
     done:   {icon:'✅', badge:'✅ 本日完了',    sub:'翌日になると入力できます', btn:'本日の点呼完了'}
   }[type];
   document.getElementById('statusIcon').textContent = cfg.icon;
-  document.getElementById('statusSub').textContent  = cfg.sub;
+  document.getElementById('statusSub').textContent  = backdateInfo ? '事後登録として記録します' : cfg.sub;
   const badgeEl = document.getElementById('statusBadge');
   if (badgeEl) badgeEl.textContent = cfg.badge;
+  const titleEl = document.getElementById('statusTitle');
+  if (titleEl) titleEl.textContent = backdateInfo ? `⏱ 事後登録：${backdateInfo.dateStr}` : '点呼を入力してください';
   const btn = document.getElementById('submitBtn');
   if (btn) {
-    btn.textContent = cfg.btn;
-    btn.disabled    = type === 'done';
-    btn.style.background = type === 'done' ? 'var(--border)' : type === 'after' ? 'var(--green)' : 'var(--accent)';
+    const locked = !backdateInfo && type === 'done';
+    btn.textContent = backdateInfo ? cfg.btn.replace('記録する','事後登録する') : cfg.btn;
+    btn.disabled    = locked;
+    btn.style.background = locked ? 'var(--border)' : type === 'after' ? 'var(--green)' : 'var(--accent)';
     btn.style.color = '#000';
     btn.style.opacity = '1';
-    btn.style.cursor = type === 'done' ? 'not-allowed' : 'pointer';
+    btn.style.cursor = locked ? 'not-allowed' : 'pointer';
   }
   // 点呼区分表示（要素が存在する場合のみ）
   const typeLabelEl = document.getElementById('typeLabel');
   const typeDescEl  = document.getElementById('typeDesc');
   if (typeLabelEl) typeLabelEl.textContent = type==='after' ? '🌙 乗務後点呼' : '🌅 乗務前点呼';
   if (typeDescEl)  typeDescEl.textContent  = type==='after' ? '本日の乗務後点呼を記録します' : '本日の乗務前点呼を記録します';
+  const cancelEl = document.getElementById('backdateCancelBar');
+  if (cancelEl) cancelEl.style.display = backdateInfo ? 'block' : 'none';
 }
 
 function updateFormForType() {
-  const isAfter = currentType() === 'after';
+  const isAfter = activeType() === 'after';
   const safe = (id, fn) => { const el = document.getElementById(id); if(el) fn(el); };
   safe('rowVehicle',  el => el.style.display = isAfter ? 'none' : 'flex');
   safe('routeLabel',  el => el.textContent   = isAfter ? '🗺️ 帰着経路' : '🗺️ 運行経路');
@@ -891,7 +929,7 @@ function loadBasic() {
   updateFoldSummary();
 
   // 乗務前点呼時：最新の乗務後点呼のオドメーターをデフォルトに
-  if (currentType() === 'before') {
+  if (activeType() === 'before') {
     const afterRecs = records.filter(r => r.type === 'after' && r.odometer);
     if (afterRecs.length) {
       afterRecs.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -1082,8 +1120,8 @@ function openFold() {
 
 // ════════════ 送信 ════════════
 function submit() {
-  const type = currentType();
-  if (type === 'done') return;
+  const type = activeType();
+  if (!backdateInfo && type === 'done') return;
   const vehicle    = document.getElementById('vehicleNo').value.trim();
   const supervisor = document.getElementById('supervisor').value.trim();
   const alc        = parseFloat(document.getElementById('alcVal').textContent);
@@ -1108,6 +1146,13 @@ function submit() {
     return;
   }
 
+  // 事後登録：同じ対象日・区分の記録が既にあれば二重登録を防止
+  if (backdateInfo && records.some(r => r.dateStr === backdateInfo.dateStr && r.type === backdateInfo.type)) {
+    toast('⚠️ この日付・区分の記録は既にあります','warn');
+    cancelBackdate();
+    return;
+  }
+
   const sleep = document.getElementById('chkSleep').checked;
   const health = document.getElementById('chkHealth').checked;
   const meds   = document.getElementById('chkMeds').checked;
@@ -1127,13 +1172,18 @@ function submit() {
     cargo:     document.getElementById('cargoInfo').value,
     notes:     document.getElementById('notes').value,
     hasIssue,
-    timestamp: n.toISOString(),
-    dateStr:   `${n.getFullYear()}/${p(n.getMonth()+1)}/${p(n.getDate())}`,
-    timeStr:   `${p(n.getHours())}:${p(n.getMinutes())}`,
+    timestamp: backdateInfo ? new Date(backdateInfo.dateStr.replace(/\//g,'-') + 'T12:00:00').toISOString() : n.toISOString(),
+    dateStr:   backdateInfo ? backdateInfo.dateStr : `${n.getFullYear()}/${p(n.getMonth()+1)}/${p(n.getDate())}`,
+    timeStr:   backdateInfo ? '事後登録' : `${p(n.getHours())}:${p(n.getMinutes())}`,
+    backfilled: !!backdateInfo,
+    enteredAt: n.toISOString(),
   };
 
   records.unshift(record);
   localStorage.setItem('tenkoRecords', JSON.stringify(records));
+
+  const wasBackdate = !!backdateInfo;
+  backdateInfo = null;
 
   // リセット
   resetPhoto();
@@ -1154,7 +1204,8 @@ function submit() {
   updateStatusBanner();
   updateFormForType();
   renderWork();
-  toast(hasIssue ? '⚠️ 記録完了（要確認あり）' : '✅ 点呼を記録しました', hasIssue ? 'warn' : 'ok');
+  toast(hasIssue ? '⚠️ 記録完了（要確認あり）' : (wasBackdate ? '✅ 事後登録しました' : '✅ 点呼を記録しました'), hasIssue ? 'warn' : 'ok');
+  if (wasBackdate) showPage('pgHistory', document.querySelectorAll('.tab')[2]);
 }
 
 // ════════════ トースト ════════════
@@ -1190,12 +1241,13 @@ function renderHistory(filter) {
     const lbl = r.type==='before'?'乗務前':'乗務後';
     const flag = r.hasIssue ? '⚠️ 要確認' : '✅ 正常';
     const flagColor = r.hasIssue ? 'var(--red)' : 'var(--green)';
+    const backfillBadge = r.backfilled ? '<span style="font-size:10px;font-weight:700;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 5px;margin-left:6px;">🕒 事後登録</span>' : '';
     return '<div class="rec-card ' + r.type + '" style="padding:12px 14px;">'
       + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'
       + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;">'
       + '<span class="rec-badge ' + r.type + '" style="flex-shrink:0;">' + lbl + '</span>'
       + '<div style="min-width:0;">'
-      + '<div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">👤 ' + (r.driver||'（氏名未入力）') + '</div>'
+      + '<div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">👤 ' + (r.driver||'（氏名未入力）') + backfillBadge + '</div>'
       + '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + r.dateStr + ' ' + r.timeStr + '</div>'
       + '</div></div>'
       + '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">'
@@ -1210,6 +1262,50 @@ function delRecord(id) {
   records = records.filter(r=>r.id!==id);
   localStorage.setItem('tenkoRecords', JSON.stringify(records));
   renderHistory(histFilter);
+  updateStatusBanner();
+  updateFormForType();
+}
+
+// ════════════ 事後登録 ════════════
+let backdateSelectedType = 'before';
+function openBackdateModal() {
+  backdateSelectedType = 'before';
+  document.getElementById('backdateTypeBefore').classList.add('active');
+  document.getElementById('backdateTypeAfter').classList.remove('active');
+  const dateEl = document.getElementById('backdateDate');
+  const n = new Date(), p = v => String(v).padStart(2,'0');
+  dateEl.max = `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())}`;
+  if (!dateEl.value) {
+    const y = new Date(n); y.setDate(y.getDate()-1);
+    dateEl.value = `${y.getFullYear()}-${p(y.getMonth()+1)}-${p(y.getDate())}`;
+  }
+  document.getElementById('backdateModal').style.display = 'flex';
+}
+function closeBackdateModal() {
+  document.getElementById('backdateModal').style.display = 'none';
+}
+function selectBackdateType(type) {
+  backdateSelectedType = type;
+  document.getElementById('backdateTypeBefore').classList.toggle('active', type==='before');
+  document.getElementById('backdateTypeAfter').classList.toggle('active', type==='after');
+}
+function confirmBackdate() {
+  const dateVal = document.getElementById('backdateDate').value;
+  if (!dateVal) { toast('⚠️ 対象日を選択してください','warn'); return; }
+  const [y,m,d] = dateVal.split('-');
+  const dateStr = `${y}/${m}/${d}`;
+  if (records.some(r => r.dateStr === dateStr && r.type === backdateSelectedType)) {
+    toast('⚠️ この日付・区分の記録は既にあります','warn');
+    return;
+  }
+  backdateInfo = { dateStr, type: backdateSelectedType };
+  closeBackdateModal();
+  showPage('pgInput', document.querySelectorAll('.tab')[0]);
+  updateStatusBanner();
+  updateFormForType();
+}
+function cancelBackdate() {
+  backdateInfo = null;
   updateStatusBanner();
   updateFormForType();
 }
@@ -1453,10 +1549,12 @@ function showRecordDetail(id) {
   document.getElementById('detailContent').innerHTML = `
     <div style="margin-bottom:12px;">
       <span class="rec-badge ${r.type}">${lbl}点呼 ${r.hasIssue?'⚠️ 要確認':'✅ 正常'}</span>
+      ${r.backfilled?'<span style="font-size:11px;font-weight:700;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:2px 6px;margin-left:6px;">🕒 事後登録</span>':''}
     </div>
     <div class="rec-grid" style="margin-bottom:12px;">
       <div class="rec-item"><div class="rec-item-label">乗務員名</div><div class="rec-item-val">${r.driver||'—'}</div></div>
-      <div class="rec-item"><div class="rec-item-label">日時</div><div class="rec-item-val" style="font-size:12px;">${r.dateStr} ${r.timeStr}</div></div>
+      <div class="rec-item"><div class="rec-item-label">対象日</div><div class="rec-item-val" style="font-size:12px;">${r.dateStr} ${r.timeStr}</div></div>
+      ${r.backfilled&&r.enteredAt?`<div class="rec-item" style="grid-column:span 2"><div class="rec-item-label">実際の登録日時</div><div class="rec-item-val" style="font-size:12px;">${new Date(r.enteredAt).toLocaleString('ja-JP')}</div></div>`:''}
       <div class="rec-item"><div class="rec-item-label">車両番号</div><div class="rec-item-val">${r.vehicle}</div></div>
       <div class="rec-item"><div class="rec-item-label">点呼方法</div><div class="rec-item-val">${r.method}</div></div>
       <div class="rec-item"><div class="rec-item-label">アルコール</div><div class="rec-item-val ${alcOk?'ok':'ng'}">${r.alcohol.toFixed(2)} mg/L ${alcOk?'✓':'✗'}</div></div>

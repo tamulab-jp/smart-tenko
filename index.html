@@ -486,11 +486,11 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--text
     <div class="field" style="margin-bottom:0;">
       <label>📷 メーターモード</label>
       <div class="mode-selector" style="grid-template-columns:1fr 1fr;">
-        <button class="mode-btn selected" id="modeOcr" onclick="setMode('ocr')">
+        <button class="mode-btn" id="modeOcr" onclick="setMode('ocr')">
           <div class="mode-icon">🤖</div>
           カメラ+OCR
         </button>
-        <button class="mode-btn" id="modeManual" onclick="setMode('manual')">
+        <button class="mode-btn selected" id="modeManual" onclick="setMode('manual')">
           <div class="mode-icon">✏️</div>
           手動入力
         </button>
@@ -732,7 +732,7 @@ let deliveries = JSON.parse(localStorage.getItem('tenkoDeliveries') || '{}');
 let jobs = JSON.parse(localStorage.getItem('tenkoJobs') || '{}');
 let foldOpen = true;
 let meterB64 = null;
-let currentMode = 'ocr'; // ocr / manual
+let currentMode = 'manual'; // ocr / manual
 let statsMonth = new Date();
 
 // ════════════ 初期化 ════════════
